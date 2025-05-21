@@ -1,0 +1,240 @@
+%% Projeto Treliça – Código Final com Prints Intermediárias e Plot Inicial
+clear; clc; close all;
+
+%% PASSO 1: Nós e Elementos
+nodes = [
+   31    0;   %  1
+   78   28;   %  2
+  156   67;   %  3
+  234   106;   %  4
+  312   106;   %  5
+  390   67;   %  6
+  468   28;   %  7
+  515    0;  %  8
+   78    0;  %  9  ← apoio pino
+   78   -39; % 10
+  156    0;  % 11
+  234   25;  % 12
+  312   25;  % 13
+  390    0;  % 14
+  468    0;  % 15 ← apoio rolete
+  468   -39; % 16
+  273    66;
+  273    25;
+  117 14;
+  195 53;
+  351 53;
+  429 14;
+];
+
+elementos = [
+    1 2;  2 3;  3 4;  4 5;  5 6;  6 7;  7 8;       % topo
+    12 17; 13 17; 18 17;20 17; 21 17; 4 17; 5 17; % diagonais MC
+    4 20; 3 20; 11 20; 12 20; 19 20; %diagonais LM
+    2 19; 3 19; 11 19; 10 19; %diagonais LB
+    5 21; 6 21; 13 21; 14 21; 21 22; %diagonais RM
+    6 22; 7 22; 14 22; 16 22; % diagonais RB
+    1  9; 11 12; 12 18; 18 13; 13 14; 8 15; % base
+    3 11;  4 12;  5 13;  6 14;       % verticais
+    9 10; 10 11; 14 16; 15 16;                      % pilares
+    2 10;  % trave especial 1 (será plotada em amarelo)
+    7 16;  % trave especial 2 (será plotada em amarelo)
+];
+
+num_nos  = size(nodes,1);
+num_elem = size(elementos,1);
+n_GL     = 2 * num_nos;
+
+fprintf('\n--- PASSO 1: Nós e Elementos ---\n');
+fprintf('Nós: %d   Elementos: %d   GDL totais: %d\n', num_nos, num_elem, n_GL);
+
+% — Plot inicial da geometria da treliça —  
+figure; hold on; grid on; axis equal;
+for e = 1:num_elem
+    n1 = elementos(e,1);
+    n2 = elementos(e,2);
+    plot([nodes(n1,1), nodes(n2,1)], [nodes(n1,2), nodes(n2,2)], 'k-','LineWidth',1);
+end
+plot(nodes(:,1), nodes(:,2), 'ro','MarkerFaceColor','r','MarkerSize',6);
+text(nodes(:,1)+2, nodes(:,2)+2, arrayfun(@num2str,(1:num_nos)','Uni',0), 'FontSize',8);
+xlabel('X (mm)'); ylabel('Y (mm)');
+title('Geometria Inicial da Ponte Treliçada');
+hold off;
+
+
+%% PASSO 1c: Propriedades
+A    = 20 * 3;   % mm² (altura × espessura)
+E    = 3300;     % MPa
+TR_t = 55;       % MPa (tração)
+TR_c = 76;       % MPa (compressão)
+fprintf('\n--- PASSO 1c: Propriedades ---\n');
+fprintf('A = %g mm²,  E = %g MPa,  TR_t = %g MPa,  TR_c = %g MPa\n', A, E, TR_t, TR_c);
+
+
+%% PASSO 1e: Condições de contorno (apoios)
+fix_dofs  = [17, 18, 30];  % nó 9=pino (ux,uy), nó15=rolete (uy)
+free_dofs = setdiff(1:n_GL, fix_dofs);
+fprintf('\n--- PASSO 1e: Contorno ---\n');
+fprintf('GDLs travados: %s\n', mat2str(fix_dofs));
+fprintf('GDLs livres : %s\n', mat2str(free_dofs));
+
+
+%% PASSO 1f: Vetor global de forças (Pg)
+Pg = zeros(n_GL,1);
+massa       = 250;    % kg
+g           = 9.81;   % m/s²
+carga_total = massa * g;
+Pg(2*4) = -carga_total/2;  % nó 4 → GDL 8
+Pg(2*5) = -carga_total/2;  % nó 5 → GDL 10
+fprintf('\n--- PASSO 1f: Vetor de Forças Pg ---\n');
+disp(Pg');
+
+
+%% PASSO 2: Rigidez elementar de cada elemento
+len_elem  = zeros(num_elem,1);
+cos_sen   = zeros(num_elem,2);
+K_elem    = cell(num_elem,1);
+for e = 1:num_elem
+    n1 = elementos(e,1);
+    n2 = elementos(e,2);
+    dx = nodes(n2,1)-nodes(n1,1);
+    dy = nodes(n2,2)-nodes(n1,2);
+    L  = hypot(dx,dy);
+    c  = dx/L;   s = dy/L;
+    len_elem(e)  = L;
+    cos_sen(e,:) = [c, s];
+    K_elem{e}    = (E*A/L)*[ ...
+      c^2,  c*s, -c^2, -c*s;
+      c*s,  s^2, -c*s, -s^2;
+     -c^2, -c*s,  c^2,  c*s;
+     -c*s, -s^2,  c*s,  s^2 ];
+end
+fprintf('\n--- PASSO 2: ke do elemento 1 ---\n');
+disp(K_elem{1});
+
+% — Verificar comprimentos > 90 mm —  
+fprintf('\n--- Verificação: elementos com L > 90 mm ---\n');
+idx_long = find(len_elem > 90);
+if isempty(idx_long)
+    disp('Nenhum elemento excede 90 mm');
+else
+    for j = 1:length(idx_long)
+        e = idx_long(j);
+        fprintf('  Elemento %2d: L = %6.2f mm\n', e, len_elem(e));
+    end
+end
+
+
+%% PASSO 3: Montagem da matriz de rigidez global Kg
+Kg = zeros(n_GL);
+for e = 1:num_elem
+    n1   = elementos(e,1);
+    n2   = elementos(e,2);
+    dofs = [2*n1-1, 2*n1, 2*n2-1, 2*n2];
+    Kg(dofs,dofs) = Kg(dofs,dofs) + K_elem{e};
+end
+fprintf('\n--- PASSO 3: Matriz de rigidez global Kg ---\n');
+disp(Kg);
+
+
+%% PASSO 4: Sistema reduzido
+Kg_red = Kg(free_dofs, free_dofs);
+Pg_red = Pg(free_dofs);
+
+% — Regularização para evitar singularidade numérica —  
+epsilon = 1e-6;
+Kg_red = Kg_red + epsilon * eye(size(Kg_red));
+
+fprintf('\n--- PASSO 4: Kg_red e Pg_red ---\n');
+disp('Kg_red ='); disp(Kg_red);
+disp('Pg_red ='); disp(Pg_red);
+
+
+%% PASSO 5: Resolver deslocamentos
+U_red = Kg_red \ Pg_red;
+U_expandida = zeros(n_GL,1);
+U_expandida(free_dofs) = U_red;
+fprintf('\n--- PASSO 5: Deslocamentos completos U_expandida ---\n');
+disp(U_expandida);
+
+
+%% PASSO 6: Deformações e Tensões
+deformacao = zeros(num_elem,1);
+tensao     = zeros(num_elem,1);
+for e = 1:num_elem
+    dofs = [2*elementos(e,1)-1, 2*elementos(e,1), 2*elementos(e,2)-1, 2*elementos(e,2)];
+    u_e  = U_expandida(dofs);
+    c    = cos_sen(e,1);
+    s    = cos_sen(e,2);
+    L    = len_elem(e);
+    deformacao(e) = ([-c -s c s] * u_e)/L;
+    tensao(e)     = E * deformacao(e);  % MPa
+end
+fprintf('\n--- PASSO 6: Deformações e Tensões ---\n');
+disp('Deformações ='); disp(deformacao);
+disp('Tensões   ='); disp(tensao);
+fprintf('Maior tensão = %.2f MPa\n', max(tensao));
+
+
+%% PASSO 7: Identificação de ruptura
+rompem = find(tensao > TR_t | tensao < -TR_c);
+fprintf('\n--- PASSO 7: Elementos que romperam ---\n');
+if isempty(rompem)
+    disp('Nenhum elemento rompeu sob a carga.');
+else
+    for k = 1:length(rompem)
+        e  = rompem(k);
+        n1 = elementos(e,1);
+        n2 = elementos(e,2);
+        if tensao(e) > TR_t
+            modo = 'tração';
+        else
+            modo = 'compressão';
+        end
+        fprintf('Elemento %2d (nós %2d–%2d) rompe em %s (σ = %.2f MPa)\n', ...
+                e, n1, n2, modo, tensao(e));
+    end
+end
+
+
+%% PASSO 8: Reações de apoio
+Reacoes = Kg * U_expandida - Pg;
+fprintf('\n--- PASSO 8: Reações nos GDLs travados ---\n');
+disp('Reações ='); disp(Reacoes(fix_dofs));
+
+
+%% PASSO 9: Plotagem Final
+figure; hold on; grid on; axis equal;
+title('Projeto Virtual – Estado das Barras');
+xlabel('X (mm)'); ylabel('Y (mm)');
+
+% traços por status
+mapa = containers.Map(["segura","rompe"], {[0 0.6 0],[1 0 0]});
+status = repmat("segura", num_elem, 1);
+status(tensao>TR_t | tensao<-TR_c) = "rompe";
+
+for e = 1:num_elem
+    n1 = elementos(e,1); n2 = elementos(e,2);
+    plot(nodes([n1 n2],1), nodes([n1 n2],2), '-', ...
+         'LineWidth',2,'Color',mapa(status(e)));
+end
+
+% linhas amarelas para as conexões 2–10 e 7–16
+special = [2 10; 7 16];
+for i = 1:size(special,1)
+    n1 = special(i,1);
+    n2 = special(i,2);
+    plot(nodes([n1 n2],1), nodes([n1 n2],2), 'y-','LineWidth',3);
+end
+
+% nós de apoio em azul, livres em vermelho
+for i = 1:num_nos
+    if any(fix_dofs==2*i-1) || any(fix_dofs==2*i)
+        plot(nodes(i,1), nodes(i,2), 'bs','MarkerFaceColor','b');
+    else
+        plot(nodes(i,1), nodes(i,2), 'ro','MarkerFaceColor','r');
+    end
+    text(nodes(i,1),nodes(i,2),sprintf(' %d',i),'FontSize',8);
+end
+
+hold off;
